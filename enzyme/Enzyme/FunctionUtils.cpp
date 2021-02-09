@@ -715,6 +715,40 @@ Function *preprocessForClone(Function *F, AAResults &AA, TargetLibraryInfo &TLI,
     }
   }
 
+  {
+    std::vector<CallInst *> FreesToErase;
+    for (auto &BB : *NewF) {
+      for (auto &I : BB) {
+
+        if (auto CI = dyn_cast<CallInst>(&I)) {
+
+          Function *called = CI->getCalledFunction();
+#if LLVM_VERSION_MAJOR >= 11
+          if (auto castinst = dyn_cast<ConstantExpr>(CI->getCalledOperand()))
+#else
+          if (auto castinst = dyn_cast<ConstantExpr>(CI->getCalledValue()))
+#endif
+          {
+            if (castinst->isCast()) {
+              if (auto fn = dyn_cast<Function>(castinst->getOperand(0)))
+                called = fn;
+            }
+          }
+
+          if (called && called->getName() == "__enzyme_iter") {
+            FreesToErase.push_back(CI);
+          }
+        }
+      }
+    }
+    // TODO we should ensure these are kept to avoid accidentially creating
+    // a memory leak
+    for (auto Free : FreesToErase) {
+      IRBuilder <>B(Free);
+      Free->setArgOperand(0, B.CreateAdd(Free->getArgOperand(0), Free->getArgOperand(1)));
+    }
+  }
+
   if (EnzymeLowerGlobals) {
     std::vector<CallInst *> Calls;
     std::vector<ReturnInst *> Returns;

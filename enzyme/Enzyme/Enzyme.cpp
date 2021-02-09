@@ -498,6 +498,7 @@ public:
     std::set<CallInst *> toLower;
     std::set<InvokeInst *> toLowerI;
     std::set<CallInst *> InactiveCalls;
+    std::set<CallInst *> IterCalls;
   retry:;
     for (BasicBlock &BB : F) {
       for (Instruction &I : BB) {
@@ -557,6 +558,10 @@ public:
               CI->addParamAttr(i, Attribute::NoCapture);
             }
           }
+        }
+        if (Fn && Fn->getName() == "__enzyme_iter") {
+          Fn->addFnAttr(Attribute::ReadNone);
+          CI->addAttribute(AttributeList::FunctionIndex, Attribute::ReadNone);
         }
         if (Fn && Fn->getName().contains("__enzyme_call_inactive")) {
           InactiveCalls.insert(CI);
@@ -864,6 +869,10 @@ public:
                   F->getName() == "__enzyme_pointer") {
                 toErase.push_back(CI);
               }
+              if (F->getName() == "__enzyme_iter") {
+                CI->replaceAllUsesWith(CI->getArgOperand(0));
+                toErase.push_back(CI);
+              }
             }
           }
         }
@@ -871,6 +880,7 @@ public:
     }
     for (auto I : toErase) {
       I->eraseFromParent();
+      changed = true;
     }
     return changed;
   }
