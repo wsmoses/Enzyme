@@ -764,4 +764,7 @@ enum class MPI_CallType {
   IRECV = 2,
 };
 
+llvm::Value *getOrInsertOpFloatSum(llvm::Module &M,
+                                   llvm::Type* OpPtr,
+                                   ConcreteType CT);
 #endif
