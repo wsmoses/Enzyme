@@ -352,4 +352,8 @@ const char *EnzymeTypeTreeToString(CTypeTreeRef src) {
   return cstr;
 }
 void EnzymeTypeTreeToStringFree(const char *cstr) { delete[] cstr; }
+
+void EnzymeRemoveTrivialAtomicIncrements(LLVMValueRef F) {
+  RemoveTrivialAtomicIncrements(*cast<Function>(unwrap(F)));
+}
 }

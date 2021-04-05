@@ -2545,6 +2545,8 @@ Value *GradientUtils::lookupM(Value *val, IRBuilder<> &BuilderM,
       }
     }
   }
+  //reduceRegister = false;
+
 
   if (!reduceRegister) {
     if (isOriginalBlock(*BuilderM.GetInsertBlock())) {
