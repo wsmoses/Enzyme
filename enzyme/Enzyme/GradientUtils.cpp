@@ -2623,6 +2623,7 @@ Value *GradientUtils::lookupM(Value *val, IRBuilder<> &BuilderM,
       }
     }
   }
+                              }
 
   auto idx = std::make_pair(val, BuilderM.GetInsertBlock());
   if (lookup_cache.find(idx) != lookup_cache.end()) {
