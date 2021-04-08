@@ -104,23 +104,27 @@
 using namespace llvm;
 
 extern "C" {
-static cl::opt<bool>
+cl::opt<bool>
     EnzymePreopt("enzyme-preopt", cl::init(true), cl::Hidden,
                  cl::desc("Run enzyme preprocessing optimizations"));
 
-static cl::opt<bool> EnzymeInline("enzyme-inline", cl::init(false), cl::Hidden,
+cl::opt<bool> EnzymeInline("enzyme-inline", cl::init(false), cl::Hidden,
                                   cl::desc("Force inlining of autodiff"));
 
-static cl::opt<bool> EnzymeNoAlias("enzyme-noalias", cl::init(false),
+cl::opt<bool> EnzymeNoAlias("enzyme-noalias", cl::init(false),
                                    cl::Hidden,
                                    cl::desc("Force noalias of autodiff"));
 
-static cl::opt<bool> EnzymeLowerGlobals(
+cl::opt<bool> EnzymeAggressiveAA("enzyme-aggressive-aa", cl::init(false),
+                                   cl::Hidden,
+                                   cl::desc("Force noalias of autodiff"));
+
+cl::opt<bool> EnzymeLowerGlobals(
     "enzyme-lower-globals", cl::init(false), cl::Hidden,
     cl::desc("Lower globals to locals assuming the global values are not "
              "needed outside of this gradient"));
 
-static cl::opt<int>
+cl::opt<int>
     EnzymeInlineCount("enzyme-inline-count", cl::init(10000), cl::Hidden,
                       cl::desc("Limit of number of functions to inline"));
 
@@ -128,7 +132,7 @@ cl::opt<bool> EnzymeCoalese("enzyme-coalese", cl::init(false), cl::Hidden,
                             cl::desc("Whether to coalese memory allocations"));
 
 #if LLVM_VERSION_MAJOR >= 8
-static cl::opt<bool> EnzymePHIRestructure(
+cl::opt<bool> EnzymePHIRestructure(
     "enzyme-phi-restructure", cl::init(false), cl::Hidden,
     cl::desc("Whether to restructure phi's to have better unwrap behavior"));
 #endif
@@ -677,8 +681,8 @@ PreProcessCache::PreProcessCache() {
   // SCEVAA causes some breakage/segfaults
   // disable for now, consider enabling in future
   // FAM.registerPass([] { return SCEVAA(); });
-
-  // FAM.registerPass([] { return CFLSteensAA(); });
+  if (EnzymeAggressiveAA)
+    FAM.registerPass([] { return CFLSteensAA(); });
 
   FAM.registerPass([] {
     auto AM = AAManager();
@@ -688,7 +692,8 @@ PreProcessCache::PreProcessCache() {
 
     // broken for different reasons
     // AM.registerFunctionAnalysis<SCEVAA>();
-    // AM.registerFunctionAnalysis<CFLSteensAA>();
+    if (EnzymeAggressiveAA)
+      AM.registerFunctionAnalysis<CFLSteensAA>();
     return AM;
   });
 
@@ -1158,7 +1163,7 @@ Function *PreProcessCache::preprocessForClone(Function *F, bool topLevel) {
     SimplifyCFGOptions scfgo(
         /*unsigned BonusThreshold=*/1, /*bool ForwardSwitchCond=*/false,
         /*bool SwitchToLookup=*/false, /*bool CanonicalLoops=*/true,
-        /*bool SinkCommon=*/true, /*AssumptionCache *AssumpCache=*/nullptr);
+        /*bool SinkCommon=*/false, /*AssumptionCache *AssumpCache=*/nullptr);
 #endif
     {
       auto PA = SimplifyCFGPass(scfgo).run(*NewF, FAM);
