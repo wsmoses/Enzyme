@@ -1565,6 +1565,7 @@ public:
     }
 
     if (Atomic) {
+
       /*
       while (auto ASC = dyn_cast<AddrSpaceCastInst>(ptr)) {
         ptr = ASC->getOperand(0);
@@ -1582,6 +1583,18 @@ public:
                      IntToFloatTy(dif->getType()),
                      cast<PointerType>(ptr->getType())->getAddressSpace()));
         dif = BuilderM.CreateBitCast(dif, IntToFloatTy(dif->getType()));
+      }
+      if (EnzymeBCPath.getValue().size())
+      if (auto CE = dyn_cast<ConstantExpr>(ptr)) {
+        if (cast<PointerType>(TmpOrig->getType())->getAddressSpace() == 3) {
+          Type* T = cast<PointerType>(ptr->getType())->getElementType();
+          Type *To = PointerType::get(T, 3);
+          if (ptr->getType() != To)
+            ptr = BuilderM.CreateAddrSpaceCast(ptr, To);
+          llvm::errs() << "possible reduction to combine: " << *ptr << " " << *dif << "\n";
+          BuilderM.CreateCall(getOrInsertDifferentialReduce(*newFunc->getParent(), cast<PointerType>(ptr->getType())), std::vector<Value*>({ptr, dif}));
+          return;
+        }
       }
 #if LLVM_VERSION_MAJOR >= 9
       AtomicRMWInst::BinOp op = AtomicRMWInst::FAdd;
