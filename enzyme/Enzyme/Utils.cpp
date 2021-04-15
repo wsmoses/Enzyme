@@ -299,9 +299,13 @@ Function *getOrInsertDifferentialReduce(Module &M, PointerType *T) {
 
     if (F->empty() && elementType->isDoubleTy()) {
       SMDiagnostic Err;
+      #if LLVM_VERSION_MAJOR <= 8
+      auto BC = llvm::parseIRFile(EnzymeBCPath + "/nvdoublered3.bc", Err, M.getContext(), true, M.getDataLayout().getStringRepresentation ());
+      #else
       auto BC = llvm::parseIRFile(EnzymeBCPath + "/nvdoublered3.bc", Err, M.getContext(), [&](StringRef) {
         return Optional<std::string>(M.getDataLayout().getStringRepresentation ());
       });
+      #endif
       if (!BC)
         Err.print("enzyme", llvm::errs());
       assert(BC);
@@ -310,9 +314,13 @@ Function *getOrInsertDifferentialReduce(Module &M, PointerType *T) {
     }
     if (F->empty() && elementType->isFloatTy()) {
       SMDiagnostic Err;
+      #if LLVM_VERSION_MAJOR <= 8
+      auto BC = llvm::parseIRFile(EnzymeBCPath + "/nvfloatred3.bc", Err, M.getContext(), false, M.getDataLayout().getStringRepresentation ());
+      #else
       auto BC = llvm::parseIRFile(EnzymeBCPath + "/nvfloatred3.bc", Err, M.getContext(), [&](StringRef) {
         return Optional<std::string>(M.getDataLayout().getStringRepresentation ());
       });
+      #endif
       if (!BC)
         Err.print("enzyme", llvm::errs());
       assert(BC);
