@@ -45,6 +45,9 @@ config.substitutions.append(('%clang', config.llvm_tools_dir + "/clang"))
 config.substitutions.append(('%loadEnzyme', ''
                                  + ' -load=@ENZYME_BINARY_DIR@/Enzyme/LLVMEnzyme-' + config.llvm_ver + config.llvm_shlib_ext
                                  ))
+config.substitutions.append(('%loadClangEnzyme', ''
+                                 + ' -Xclang -load -Xclang @ENZYME_BINARY_DIR@/Enzyme/ClangEnzyme-' + config.llvm_ver + config.llvm_shlib_ext
+                                 ))
 
 # Let the main config do the real work.
 lit_config.load_config(config, "@ENZYME_SOURCE_DIR@/test/lit.cfg.py")
