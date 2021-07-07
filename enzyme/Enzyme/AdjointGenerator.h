@@ -3530,6 +3530,99 @@ public:
       return;
     }
 
+    // Approximate algo (for sum):  -> if statement yet to be
+    // 1. malloc intermediate buffer (done)
+    // 2. MPI_Bcast diff(recvbuffer) to intermediate (done)
+    // 3. Zero diff(recvbuffer) [memset to 0] (done)
+    // 4. diff(sendbuffer) += intermediate buffer (diffmemcopy)  <---!!
+    // 5. free intermediate buffer (done)
+    // 6. return (done)
+
+    if (funcName == "MPI_Reduce"){
+      if (Mode == DerivativeMode::ReverseModeGradient ||
+          Mode == DerivativeMode::ReverseModeCombined) {
+        // TODO insert a check for sum
+
+        IRBuilder<> Builder2(call.getParent());
+        getReverseBuilder(Builder2);
+
+        // Initialize recvbuf
+        Value *recvbuf = gutils->invertPointerM(call.getOperand(0), Builder2);   
+
+        Value *datatype =
+            lookup(gutils->getNewFromOriginal(call.getOperand(2)), Builder2);
+        Value *count =
+            lookup(gutils->getNewFromOriginal(call.getOperand(1)), Builder2);
+        Value *root =
+            lookup(gutils->getNewFromOriginal(call.getOperand(3)), Builder2);
+        
+        // Get the length for the allocation of the intermediate buffer
+        auto len_arg = Builder2.CreateZExtOrTrunc(
+          count, Type::getInt64Ty(call.getContext()));
+        len_arg =
+            Builder2.CreateMul(len_arg,
+                              Builder2.CreateZExtOrTrunc(
+                                  tysize, Type::getInt64Ty(call.getContext())),
+                              "", true, true);
+        
+        // Alloc intermediate buffer
+        Value *buf = CallInst::CreateMalloc(
+            Builder2.GetInsertBlock(), len_arg->getType(),
+            Type::getInt8Ty(call.getContext()),
+            ConstantInt::get(Type::getInt64Ty(len_arg->getContext()), 1),
+            len_arg, nullptr, "mpireduce_malloccache");
+        if (cast<Instruction>(buf)->getParent() == nullptr) {
+          Builder2.Insert(cast<Instruction>(buf));
+        }
+
+        Value *comm =
+            lookup(gutils->getNewFromOriginal(call.getOperand(4)), Builder2);
+        
+        // MPI_Bcast the recvbuffer to intermediate
+        {
+          Value *args[] = {
+            /*recvbuf*/ recvbuf,
+            /*buf*/ buf,
+            /*count*/ count,
+            /*datatype*/ datatype,
+            /*int root*/ root,
+            /*comm*/ comm,
+          };
+          Type *types[6];
+          for (int i = 0; i < 6; i++)
+            types[i] = args[i]->getType();
+
+          FunctionType *FT = FunctionType::get(root->getType(), types);
+          Builder2.CreateCall(
+            called->getParent()->getOrInsertFunction("MPI_Bcast", FT), args);
+        }
+
+        // Memset the recvbuffer to 0
+        auto val_arg = ConstantInt::get(Type::getInt8Ty(call.getContext()), 0);
+        auto volatile_arg = ConstantInt::getFalse(call.getContext());
+        Value *args[] = {recvbuf, val_arg, len_arg, volatile_arg};
+        Type *tys[] = {args[0]->getType(), args[2]->getType()};
+        auto memset = cast<CallInst>(Builder2.CreateCall(
+            Intrinsic::getDeclaration(gutils->newFunc->getParent(),
+                                      Intrinsic::memset, tys),
+            args));
+        memset->addParamAttr(0, Attribute::NonNull);
+
+        // Diffmemcopy intermediate buffer -> diffe(sendbuffer)
+        DifferentiableMemCopyFloats(call, call.getOperand(0), gutils->invertPointerM(sendbuf, Builder2),
+                                    buf, len_arg, Builder2);
+
+        // Free up intermediate buffer
+        auto ci = cast<CallInst>(
+            CallInst::CreateFree(buf, Builder2.GetInsertBlock()));
+        ci->addAttribute(AttributeList::FirstArgIndex, Attribute::NonNull);
+        if (ci->getParent() == nullptr) {
+          Builder2.Insert(ci);
+        }
+      }
+      return;
+    }
+
     llvm::errs() << call << "\n";
     llvm::errs() << called << "\n";
     llvm_unreachable("Unhandled MPI FUNCTION");
