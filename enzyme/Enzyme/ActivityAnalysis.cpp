@@ -81,7 +81,23 @@ cl::opt<bool>
 const char *KnownInactiveFunctionsStartingWith[] = {
     "_ZN4core3fmt", "_ZN3std2io5stdio6_print", "f90io", "$ss5print"};
 
-std::set<std::string> KnownInactiveFunctions = {
+const std::map<std::string, size_t> MPIInactiveCommAllocators = {
+  {"MPI_Graph_create", 5},
+  {"MPI_Comm_split", 2},
+  {"MPI_Intercomm_create", 6},
+  {"MPI_Comm_spawn", 6},
+  {"MPI_Comm_spawn_multiple", 7},
+  {"MPI_Comm_accept", 4},
+  {"MPI_Comm_connect", 4},
+  {"MPI_Comm_create", 2},
+  {"MPI_Comm_create_group", 3},
+  {"MPI_Comm_dup", 1},
+  {"MPI_Comm_dup", 2},
+  {"MPI_Comm_idup", 1},
+  {"MPI_Comm_join", 1},
+};
+
+const std::set<std::string> KnownInactiveFunctions = {
     "__assert_fail",
     "__cxa_guard_acquire",
     "__cxa_guard_release",
@@ -118,6 +134,21 @@ std::set<std::string> KnownInactiveFunctions = {
     "MPI_Comm_rank",
     "MPI_Get_processor_name",
     "MPI_Finalize",
+    "MPI_Test",
+    "MPI_Probe", // double check potential syncronization
+    "MPI_Barrier",
+    "MPI_Get_count",
+    "MPI_Comm_free",
+    "MPI_Comm_get_parent",
+    "MPI_Comm_get_name",
+    "MPI_Comm_get_info",
+    "MPI_Comm_remote_size",
+    "MPI_Comm_set_info",
+    "MPI_Comm_set_name",
+    "MPI_Comm_compare",
+    "MPI_Comm_call_errhandler",
+    "MPI_Comm_create_errhandler",
+    "MPI_Comm_disconnect",
     "_msize",
     "ftnio_fmt_write64",
     "f90_strcmp_klen",
@@ -166,6 +197,9 @@ bool ActivityAnalyzer::isFunctionArgumentConstant(CallInst *CI, Value *val) {
     }
   }
   if (KnownInactiveFunctions.count(Name.str())) {
+    return true;
+  }
+  if (MPIInactiveCommAllocators.find(Name.str()) != MPIInactiveCommAllocators.end()) {
     return true;
   }
   if (F->getIntrinsicID() == Intrinsic::trap)
@@ -883,7 +917,8 @@ bool ActivityAnalyzer::isConstantValue(TypeResults &TR, Value *Val) {
             }
           }
 
-          if (KnownInactiveFunctions.count(called->getName().str())) {
+          if (KnownInactiveFunctions.count(called->getName().str()) ||
+              MPIInactiveCommAllocators.find(called->getName().str()) != MPIInactiveCommAllocators.end()) {
             InsertConstantValue(TR, Val);
             insertConstantsFrom(TR, *UpHypothesis);
             return true;
@@ -1042,12 +1077,18 @@ bool ActivityAnalyzer::isConstantValue(TypeResults &TR, Value *Val) {
                 isDeallocationFunction(*F, TLI)) {
               continue;
             }
-            if (KnownInactiveFunctions.count(F->getName().str())) {
+            if (KnownInactiveFunctions.count(F->getName().str()) ||
+                MPIInactiveCommAllocators.find(F->getName().str()) != MPIInactiveCommAllocators.end()) {
               continue;
             }
             if (isMemFreeLibMFunction(F->getName()) ||
                 F->getName() == "__fd_sincos_1") {
               continue;
+            }
+            for (auto FuncName : KnownInactiveFunctionsStartingWith) {
+              if (F->getName().startswith(FuncName)) {
+                return true;
+              }
             }
 
             if (F->getName() == "__cxa_guard_acquire" ||
@@ -1508,7 +1549,8 @@ bool ActivityAnalyzer::isInstructionInactiveFromOrigin(TypeResults &TR,
         }
       }
 
-      if (KnownInactiveFunctions.count(called->getName().str())) {
+      if (KnownInactiveFunctions.count(called->getName().str()) ||
+          MPIInactiveCommAllocators.find(called->getName().str()) != MPIInactiveCommAllocators.end()) {
         if (EnzymePrintActivity)
           llvm::errs() << "constant(" << (int)directions
                        << ") up-knowninactivecall " << *inst << "\n";
