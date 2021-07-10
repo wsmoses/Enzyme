@@ -3229,7 +3229,8 @@ void TypeAnalyzer::visitCallInst(CallInst &call) {
       return;
     }
     if (funcName == "MPI_Reduce") {
-      // int MPI_Reduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype,
+      // int MPI_Reduce(const void *sendbuf, void *recvbuf, int count,
+      // MPI_Datatype datatype,
       //         MPI_Op op, int root, MPI_Comm comm)
       // sendbuf
       updateAnalysis(call.getOperand(0), TypeTree(BaseType::Pointer).Only(-1),
