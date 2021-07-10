@@ -17,23 +17,16 @@
 
 // XFAIL: *
 
-double __enzyme_autodiff(void*, ...);
+void __enzyme_autodiff(void*, ...);
 
-double mpi_reduce_test(double b, int n, int rank, int numprocs) {
-    MPI_Reduce(&b, &global_sum, 1, MPI_DOUBLE, MPI_SUM, 0,
+void mpi_reduce_test(double *b, double *global_sum, int n, int rank, int numprocs) {
+    MPI_Reduce(b, global_sum, 1, MPI_DOUBLE, MPI_SUM, 0,
            MPI_COMM_WORLD);
-           
-    return global_sum;
 }
 
 int main(int argc, char** argv) {
   MPI_Init(&argc, &argv);
   double h=1e-6;
-  if(argc<2) {
-    printf("Not enough arguments. Missing problem size.");
-    MPI_Finalize();
-    return 0;
-  }
   int numprocs;
   MPI_Comm_size(MPI_COMM_WORLD,&numprocs);
   int N=10;
@@ -41,8 +34,12 @@ int main(int argc, char** argv) {
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-  double res = __enzyme_autodiff((void*)mpi_bcast_test, 10.0+rank, N, rank, numprocs);
-  printf("res=%f rank=%d\n", res, rank);
+  double sum;
+  double dsum = (rank == 0) ? 1.0 : 123456789;
+  double b = 10.0+rank;
+  double db = 0;
+  __enzyme_autodiff((void*)mpi_reduce_test, &b, &db, &sum, &dsum, N, rank, numprocs);
+  printf("dsum=%f db=%f rank=%d\n", dsum, db, rank);
   fflush(0);
   MPI_Finalize();
 }
