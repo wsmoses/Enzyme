@@ -3230,7 +3230,7 @@ void TypeAnalyzer::visitCallInst(CallInst &call) {
       updateAnalysis(&call, TypeTree(BaseType::Integer).Only(-1), &call);
       return;
     }
-    if (funcName == "MPI_Reduce") {
+    if (funcName == "MPI_Reduce" || funcName == "PMPI_Reduce") {
       // int MPI_Reduce(const void *sendbuf, void *recvbuf, int count,
       // MPI_Datatype datatype,
       //         MPI_Op op, int root, MPI_Comm comm)
@@ -4182,6 +4182,11 @@ ConcreteType TypeAnalysis::firstPointer(size_t num, Value *val,
   assert(val);
   assert(val->getType());
   auto q = query(val, fn).Data0();
+  if (!(val->getType()->isPointerTy() || q[{}] == BaseType::Pointer)) {
+      llvm::errs() << *fn.Function << "\n";
+      analyzedFunctions.find(fn)->second.dump();
+      llvm::errs() << "val: " << *val << "\n";
+  }
   assert(val->getType()->isPointerTy() || q[{}] == BaseType::Pointer);
   auto dt = q[{0}];
   dt.orIn(q[{-1}], pointerIntSame);
