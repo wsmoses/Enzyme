@@ -1695,7 +1695,8 @@ public:
     }
 
     if (Mode == DerivativeMode::ReverseModePrimal ||
-        Mode == DerivativeMode::ReverseModeCombined) {
+        Mode == DerivativeMode::ReverseModeCombined ||
+        Mode == DerivativeMode::ForwardMode) {
       IRBuilder<> BuilderZ(gutils->getNewFromOriginal(&MS));
 
       SmallVector<Value *, 4> args;
@@ -1727,18 +1728,39 @@ public:
     }
   }
 
-  void subTransferHelper(Type *secretty, BasicBlock *parent,
-                         Intrinsic::ID intrinsic, unsigned dstalign,
-                         unsigned srcalign, unsigned offset, Value *orig_dst,
-                         Value *orig_src, Value *length, Value *isVolatile,
-                         llvm::CallInst *MTI, bool allowForward = true) {
+  void subTransferHelper(Type *secretty, llvm::MemTransferInst &MTI,
+                         unsigned dstalign, unsigned srcalign, unsigned offset,
+                         Value *length, bool allowForward = true) {
+
+    BasicBlock *parent = MTI.getParent();
+    Intrinsic::ID intrinsic = MTI.getIntrinsicID();
+    Value *orig_dst = MTI.getOperand(0);
+    Value *orig_src = MTI.getOperand(1);
+#if LLVM_VERSION_MAJOR >= 7
+    Value *isVolatile = gutils->getNewFromOriginal(MTI.getOperand(3));
+#else
+    Value *isVolatile = gutils->getNewFromOriginal(MTI.getOperand(4));
+#endif
+
     // TODO offset
     if (secretty) {
       // no change to forward pass if represents floats
       if (Mode == DerivativeMode::ReverseModeGradient ||
-          Mode == DerivativeMode::ReverseModeCombined) {
-        IRBuilder<> Builder2(parent);
-        getReverseBuilder(Builder2);
+          Mode == DerivativeMode::ReverseModeCombined ||
+          Mode == DerivativeMode::ForwardMode) {
+
+        IRBuilder<> Builder2 =
+            Mode == DerivativeMode::ReverseModeGradient ||
+                    Mode == DerivativeMode::ReverseModeCombined
+                ? IRBuilder<>(parent)
+                : IRBuilder<>(&MTI);
+
+        if (Mode == DerivativeMode::ReverseModeGradient ||
+            Mode == DerivativeMode::ReverseModeCombined) {
+          getReverseBuilder(Builder2);
+        } else {
+          getForwardBuilder(Builder2);
+        }
 
         // If the src is context simply zero d_dst and don't propagate to d_src
         // (which thus == src and may be illegal)
@@ -1803,7 +1825,8 @@ public:
       // if represents pointer or integer type then only need to modify forward
       // pass with the copy
       if (allowForward && (Mode == DerivativeMode::ReverseModePrimal ||
-                           Mode == DerivativeMode::ReverseModeCombined)) {
+                           Mode == DerivativeMode::ReverseModeCombined ||
+                           Mode == DerivativeMode::ForwardMode)) {
 
         // It is questionable how the following case would even occur, but if
         // the dst is constant, we shouldn't do anything extra
@@ -1812,7 +1835,7 @@ public:
         }
 
         SmallVector<Value *, 4> args;
-        IRBuilder<> BuilderZ(gutils->getNewFromOriginal(MTI));
+        IRBuilder<> BuilderZ(gutils->getNewFromOriginal(&MTI));
 
         // If src is inactive, then we should copy from the regular pointer
         // (i.e. suppose we are copying constant memory representing dimensions
@@ -1849,9 +1872,9 @@ public:
         auto memtransIntr = Intrinsic::getDeclaration(
             gutils->newFunc->getParent(), intrinsic, tys);
         auto cal = BuilderZ.CreateCall(memtransIntr, args);
-        cal->setAttributes(MTI->getAttributes());
+        cal->setAttributes(MTI.getAttributes());
         cal->setCallingConv(memtransIntr->getCallingConv());
-        cal->setTailCallKind(MTI->getTailCallKind());
+        cal->setTailCallKind(MTI.getTailCallKind());
 
         if (dstalign != 0) {
 #if LLVM_VERSION_MAJOR >= 10
@@ -1889,11 +1912,6 @@ public:
     Value *orig_op0 = MTI.getOperand(0);
     Value *orig_op1 = MTI.getOperand(1);
     Value *op2 = gutils->getNewFromOriginal(MTI.getOperand(2));
-#if LLVM_VERSION_MAJOR >= 7
-    Value *isVolatile = gutils->getNewFromOriginal(MTI.getOperand(3));
-#else
-    Value *isVolatile = gutils->getNewFromOriginal(MTI.getOperand(4));
-#endif
 
     // copying into nullptr is invalid (not sure why it exists here), but we
     // shouldn't do it in reverse pass or shadow
@@ -2020,10 +2038,9 @@ public:
           srcalign = 1;
         }
       }
-      subTransferHelper(dt.isFloat(), MTI.getParent(), MTI.getIntrinsicID(),
-                        subdstalign, subsrcalign, /*offset*/ start, orig_op0,
-                        orig_op1, /*length*/ length, /*volatile*/ isVolatile,
-                        &MTI);
+      subTransferHelper(dt.isFloat(), MTI, subdstalign, subsrcalign,
+                        /*offset*/ start,
+                        /*length*/ length);
 
       if (nextStart == size)
         break;
