@@ -3123,6 +3123,8 @@ void TypeAnalyzer::visitCallInst(CallInst &call) {
       return;
     }
     /// MPI
+    if (funcName.startswith("PMPI_"))
+        funcName = funcName.substr(1);
     if (funcName == "MPI_Init") {
       TypeTree ptrint;
       ptrint.insert({-1}, BaseType::Pointer);
@@ -4179,8 +4181,8 @@ ConcreteType TypeAnalysis::firstPointer(size_t num, Value *val,
                                         bool pointerIntSame) {
   assert(val);
   assert(val->getType());
-  assert(val->getType()->isPointerTy());
   auto q = query(val, fn).Data0();
+  assert(val->getType()->isPointerTy() || q[{}] == BaseType::Pointer);
   auto dt = q[{0}];
   dt.orIn(q[{-1}], pointerIntSame);
   for (size_t i = 1; i < num; ++i) {

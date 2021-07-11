@@ -145,8 +145,9 @@ public:
     }
   }
 
-  llvm::Value *MPI_TYPE_SIZE(llvm::Value *DT, IRBuilder<> &B) {
-    Type *intType = Type::getIntNTy(DT->getContext(), sizeof(int) * 8);
+  llvm::Value *MPI_TYPE_SIZE(llvm::Value *DT, IRBuilder<> &B, Type *intType) {
+    if (DT->getType()->isIntegerTy())
+        DT = B.CreateIntToPtr(DT, Type::getInt8PtrTy(DT->getContext()));
     Type *pargs[] = {Type::getInt8PtrTy(DT->getContext()),
                      PointerType::getUnqual(intType)};
     auto FT = FunctionType::get(intType, pargs, false);
@@ -3147,7 +3148,7 @@ public:
 
         if (funcName == "MPI_Isend") {
           Value *tysize = MPI_TYPE_SIZE(
-              gutils->getNewFromOriginal(call.getOperand(2)), BuilderZ);
+              gutils->getNewFromOriginal(call.getOperand(2)), BuilderZ, call.getType());
 
           auto len_arg = BuilderZ.CreateZExtOrTrunc(
               gutils->getNewFromOriginal(call.getOperand(1)),
@@ -3238,7 +3239,7 @@ public:
             lookup(gutils->getNewFromOriginal(call.getOperand(1)), Builder2),
             Type::getInt64Ty(Builder2.getContext()));
         auto tysize = MPI_TYPE_SIZE(
-            gutils->getNewFromOriginal(call.getOperand(2)), Builder2);
+            gutils->getNewFromOriginal(call.getOperand(2)), Builder2, call.getType());
         len_arg = Builder2.CreateMul(
             len_arg,
             Builder2.CreateZExtOrTrunc(tysize,
@@ -3340,25 +3341,31 @@ public:
         IRBuilder<> Builder2(call.getParent());
         getReverseBuilder(Builder2);
         Value *shadow = gutils->invertPointerM(call.getOperand(0), Builder2);
+        
+        if (shadow->getType()->isIntegerTy())
+            shadow = Builder2.CreateIntToPtr(shadow, Type::getInt8PtrTy(call.getContext()));
 
-        Type *statusType = Type::getInt8PtrTy(call.getContext());
+        Type *statusType = nullptr;
 
         if (Function *recvfn = called->getParent()->getFunction("MPI_Recv")) {
           auto statusArg = recvfn->arg_end();
           statusArg--;
-          statusType =
-              cast<PointerType>(statusArg->getType())->getElementType();
-        } else {
-          llvm::errs() << " warning could not automatically determine mpi "
-                          "status type, assuming i8*\n";
+          if (auto PT = dyn_cast<PointerType>(statusArg->getType()))
+              statusType = PT->getElementType();
         }
+        if (statusType == nullptr) {
+          statusType = ArrayType::get(Type::getInt8Ty(call.getContext()), 24);
+          llvm::errs() << " warning could not automatically determine mpi "
+                          "status type, assuming [24 x i8]\n";
+        }
+
+        Value* datatype = lookup(gutils->getNewFromOriginal(call.getOperand(2)), Builder2);
 
         Value *args[] = {
             /*buf*/ NULL,
             /*count*/
             lookup(gutils->getNewFromOriginal(call.getOperand(1)), Builder2),
-            /*datatype*/
-            lookup(gutils->getNewFromOriginal(call.getOperand(2)), Builder2),
+            /*datatype*/datatype,
             /*src*/
             lookup(gutils->getNewFromOriginal(call.getOperand(3)), Builder2),
             /*tag*/
@@ -3368,7 +3375,7 @@ public:
             /*status*/
             IRBuilder<>(gutils->inversionAllocs).CreateAlloca(statusType)};
 
-        Value *tysize = MPI_TYPE_SIZE(args[2], Builder2);
+        Value *tysize = MPI_TYPE_SIZE(datatype, Builder2, call.getType());
 
         auto len_arg = Builder2.CreateZExtOrTrunc(
             args[1], Type::getInt64Ty(call.getContext()));
@@ -3380,7 +3387,7 @@ public:
 
         Value *firstallocation = CallInst::CreateMalloc(
             Builder2.GetInsertBlock(), len_arg->getType(),
-            cast<PointerType>(shadow->getType())->getElementType(),
+            Type::getInt8Ty(call.getContext()),
             ConstantInt::get(Type::getInt64Ty(len_arg->getContext()), 1),
             len_arg, nullptr, "mpirecv_malloccache");
         if (cast<Instruction>(firstallocation)->getParent() == nullptr) {
@@ -3416,10 +3423,16 @@ public:
           Mode == DerivativeMode::ReverseModeCombined) {
         IRBuilder<> Builder2(call.getParent());
         getReverseBuilder(Builder2);
+        
+        Value *shadow = gutils->invertPointerM(call.getOperand(0), Builder2);
+        if (shadow->getType()->isIntegerTy())
+            shadow = Builder2.CreateIntToPtr(shadow, Type::getInt8PtrTy(call.getContext()));
+        Value *datatype = lookup(gutils->getNewFromOriginal(call.getOperand(2)), Builder2);
+
         Value *args[] = {
-            gutils->invertPointerM(call.getOperand(0), Builder2),
+            shadow,
             lookup(gutils->getNewFromOriginal(call.getOperand(1)), Builder2),
-            lookup(gutils->getNewFromOriginal(call.getOperand(2)), Builder2),
+            datatype,
             lookup(gutils->getNewFromOriginal(call.getOperand(3)), Builder2),
             lookup(gutils->getNewFromOriginal(call.getOperand(4)), Builder2),
             lookup(gutils->getNewFromOriginal(call.getOperand(5)), Builder2),
@@ -3438,7 +3451,7 @@ public:
         auto val_arg = ConstantInt::get(Type::getInt8Ty(call.getContext()), 0);
         auto len_arg = Builder2.CreateZExtOrTrunc(
             args[1], Type::getInt64Ty(call.getContext()));
-        auto tysize = MPI_TYPE_SIZE(args[2], Builder2);
+        auto tysize = MPI_TYPE_SIZE(datatype, Builder2, call.getType());
         len_arg =
             Builder2.CreateMul(len_arg,
                                Builder2.CreateZExtOrTrunc(
@@ -3493,7 +3506,7 @@ public:
             lookup(gutils->getNewFromOriginal(call.getOperand(4)), Builder2);
 
         Value *rank = MPI_COMM_RANK(comm, Builder2, root->getType());
-        Value *tysize = MPI_TYPE_SIZE(datatype, Builder2);
+        Value *tysize = MPI_TYPE_SIZE(datatype, Builder2, call.getType());
 
         auto len_arg = Builder2.CreateZExtOrTrunc(
             count, Type::getInt64Ty(call.getContext()));
@@ -3677,7 +3690,7 @@ public:
 
         Value *rank = MPI_COMM_RANK(comm, Builder2, root->getType());
 
-        Value *tysize = MPI_TYPE_SIZE(datatype, Builder2);
+        Value *tysize = MPI_TYPE_SIZE(datatype, Builder2, call.getType());
 
         // Get the length for the allocation of the intermediate buffer
         auto len_arg = Builder2.CreateZExtOrTrunc(
@@ -3849,7 +3862,7 @@ public:
 
         Value *op = lookup(gutils->getNewFromOriginal(orig_op), Builder2);
 
-        Value *tysize = MPI_TYPE_SIZE(datatype, Builder2);
+        Value *tysize = MPI_TYPE_SIZE(datatype, Builder2, call.getType());
 
         // Get the length for the allocation of the intermediate buffer
         auto len_arg = Builder2.CreateZExtOrTrunc(
@@ -3961,7 +3974,7 @@ public:
         Value *comm = lookup(gutils->getNewFromOriginal(orig_comm), Builder2);
 
         Value *rank = MPI_COMM_RANK(comm, Builder2, root->getType());
-        Value *tysize = MPI_TYPE_SIZE(sendtype, Builder2);
+        Value *tysize = MPI_TYPE_SIZE(sendtype, Builder2, call.getType());
 
         // Get the length for the allocation of the intermediate buffer
         auto sendlen_arg = Builder2.CreateZExtOrTrunc(
@@ -4108,7 +4121,7 @@ public:
         Value *comm = lookup(gutils->getNewFromOriginal(orig_comm), Builder2);
 
         Value *rank = MPI_COMM_RANK(comm, Builder2, root->getType());
-        Value *tysize = MPI_TYPE_SIZE(sendtype, Builder2);
+        Value *tysize = MPI_TYPE_SIZE(sendtype, Builder2, call.getType());
 
         // Get the length for the allocation of the intermediate buffer
         auto recvlen_arg = Builder2.CreateZExtOrTrunc(
@@ -4284,7 +4297,7 @@ public:
 
         Value *comm = lookup(gutils->getNewFromOriginal(orig_comm), Builder2);
 
-        Value *tysize = MPI_TYPE_SIZE(sendtype, Builder2);
+        Value *tysize = MPI_TYPE_SIZE(sendtype, Builder2, call.getType());
 
         // Get the length for the allocation of the intermediate buffer
         auto sendlen_arg = Builder2.CreateZExtOrTrunc(
@@ -4617,6 +4630,8 @@ public:
       }
     }
 
+    if (funcName.startswith("PMPI_"))
+        funcName = funcName.substr(1);
     if (funcName.startswith("MPI_") &&
         (!gutils->isConstantInstruction(&call) || funcName == "MPI_Barrier" ||
          funcName == "MPI_Comm_free" || funcName == "MPI_Comm_disconnect" ||
