@@ -201,11 +201,20 @@ Value *GradientUtils::unwrapM(Value *const val, IRBuilder<> &BuilderM,
         ___res =                                                               \
             unwrapM(v, Builder, available, mode, origParent, permitCache);     \
       if (!___res && mode == UnwrapMode::AttemptFullUnwrapWithLookup) {        \
+        bool noLookup = false;\
+       if (auto opinst = dyn_cast<Instruction>(v)) \
+      if (isOriginalBlock(*Builder.GetInsertBlock())) {\
+          if (opinst->getParent() != Builder.GetInsertBlock() && !DT.dominates(opinst->getParent(), Builder.GetInsertBlock())) {\
+            assert(mode != UnwrapMode::LegalFullUnwrap);\
+            noLookup = true;\
+          }\
+      }\
         if (origParent)                                                        \
           if (auto opinst = dyn_cast<Instruction>(v)) {                        \
             v = fixLCSSA(opinst, origParent, /*mergeIfTrue*/ false,            \
                          /*guaranteedVisible*/ false);                         \
           }                                                                    \
+          if (!noLookup)\
         ___res = lookupM(v, Builder, available, v != val);                     \
       }                                                                        \
       if (___res)                                                              \
@@ -1145,6 +1154,13 @@ endCheck:
       mode == UnwrapMode::AttemptFullUnwrapWithLookup) {
     assert(val->getName() != "<badref>");
     Value *nval = val;
+    if (auto opinst = dyn_cast<Instruction>(nval)) 
+      if (isOriginalBlock(*BuilderM.GetInsertBlock())) {
+          if (opinst->getParent() != BuilderM.GetInsertBlock() && !DT.dominates(opinst->getParent(), BuilderM.GetInsertBlock())) {
+            assert(mode != UnwrapMode::LegalFullUnwrap);
+            return nullptr;
+          }
+      }
     if (scope)
       if (auto opinst = dyn_cast<Instruction>(nval)) {
         nval = fixLCSSA(opinst, scope, /*mergeIfTrue*/ false,
@@ -3631,7 +3647,10 @@ Value *GradientUtils::lookupM(Value *val, IRBuilder<> &BuilderM,
             }
           }
 
+
           if (ctx && lim && start && offset) {
+            Value *firstLim = lim;
+            Value *firstStart = start;
             while (Loop *L = LI.getLoopFor(ctx)) {
               BasicBlock *nctx = L->getLoopPreheader();
               assert(nctx);
@@ -3655,12 +3674,12 @@ Value *GradientUtils::lookupM(Value *val, IRBuilder<> &BuilderM,
               if (failed)
                 break;
               IRBuilder<> nv(nctx->getTerminator());
-              Value *nlim = unwrapM(lim, nv,
+              Value *nlim = unwrapM(firstLim, nv,
                                     /*available*/ ValueToValueMapTy(),
                                     UnwrapMode::AttemptFullUnwrapWithLookup);
               if (!nlim)
                 break;
-              Value *nstart = unwrapM(start, nv,
+              Value *nstart = unwrapM(firstStart, nv,
                                       /*available*/ ValueToValueMapTy(),
                                       UnwrapMode::AttemptFullUnwrapWithLookup);
               if (!nstart)
@@ -3679,6 +3698,10 @@ Value *GradientUtils::lookupM(Value *val, IRBuilder<> &BuilderM,
             bool forceSingleIter = false;
             if (!getContext(ctx, tmp)) {
               forceSingleIter = true;
+            } else if (auto inst = dyn_cast<Instruction>(lim)) {
+                if (inst->getParent() == ctx || !DT.dominates(inst->getParent(), ctx)) {
+                    forceSingleIter = true;
+                }
             }
             LimitContext lctx(/*ReverseLimit*/ reverseBlocks.size() > 0, ctx,
                               forceSingleIter);
@@ -3794,6 +3817,12 @@ Value *GradientUtils::lookupM(Value *val, IRBuilder<> &BuilderM,
   auto found = findInMap(scopeMap, (Value *)inst);
   Value *result = lookupValueFromCache(/*isForwardPass*/ false, BuilderM,
                                        found->second, found->first, isi1);
+  if (result->getType() != inst->getType()) {
+      llvm::errs() << "newFunc: " << *newFunc << "\n";
+      llvm::errs() << "result: " << *result << "\n";
+      llvm::errs() << "inst: " << *inst << "\n";
+      llvm::errs() <<  "val: " << *val << "\n";
+  }
   assert(result->getType() == inst->getType());
   lookup_cache[BuilderM.GetInsertBlock()][val] = result;
   assert(result);

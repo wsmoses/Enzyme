@@ -729,8 +729,15 @@ AllocaInst *CacheUtility::createCacheForScope(LimitContext ctx, Type *T,
             ConstantInt::get(Type::getInt64Ty(T->getContext()), 3));
       }
       if (extraSize && i == 0) {
+        ValueToValueMapTy available;
+        for (auto &sl : sublimits) {
+            for (auto &cl : sl.second) {
+                if (cl.first.var)
+                    available[cl.first.var] = cl.first.var;
+            }
+        }
         Value *es = unwrapM(extraSize, allocationBuilder,
-                            /*available*/ ValueToValueMapTy(),
+                            /*available*/available,
                             UnwrapMode::AttemptFullUnwrapWithLookup);
         assert(es);
         size = allocationBuilder.CreateMul(size, es, "", /*NUW*/ true,
