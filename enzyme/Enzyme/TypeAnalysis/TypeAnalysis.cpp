@@ -740,6 +740,31 @@ void TypeAnalyzer::considerTBAA() {
           updateAnalysis(call->getOperand(0), update.Only(-1), call);
           updateAnalysis(call->getOperand(1), update.Only(-1), call);
           continue;
+        } else if (call->getCalledFunction() &&
+            call->getCalledFunction()->getIntrinsicID() == Intrinsic::masked_gather) {
+          auto VT = cast<VectorType>(call->getType());
+          auto LoadSize = (DL.getTypeSizeInBits(VT) + 7) / 8;
+          TypeTree req = vdptr.Only(-1);
+          updateAnalysis(call, req.Lookup(LoadSize, DL), call);
+#if 0
+          // TODO propagate to both the ptrs and passthrough 
+          auto vdptr
+                           // Cut off any values outside of load
+                           .ShiftIndices(DL, /*init offset*/ 0,
+                                         /*max size*/ LoadSize,
+                                         /*new offset*/ 0)
+                           // Don't propagate "Anything" into ptr
+                           .PurgeAnything()
+                           .Only(-1),
+                       LI);
+          if (auto CV = dyn_cast<ConstantVector>(call->getArgOperand(2))) {
+              for (int i=0; i<VT->getNumElements(); ++i) {
+                if (cast<ConstantInt>(CV->getOperand(i))->getValue()) {
+                    updateAnalysis(call->getArgOperand(1), 
+                }
+              }
+          }
+#endif
         } else if (call->getType()->isPointerTy()) {
           updateAnalysis(call, vdptr.Only(-1), call);
         } else {

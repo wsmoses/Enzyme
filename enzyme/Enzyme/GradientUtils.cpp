@@ -834,17 +834,10 @@ Value *GradientUtils::unwrapM(Value *const val, IRBuilder<> &BuilderM,
             if (BuilderM.GetInsertPoint() != oldB->end())
               goto endCheck;
 
-            // todo speed this up
-            BasicBlock *fwd = nullptr;
-            for (const auto &pair : reverseBlocks) {
-              const std::vector<BasicBlock *> &vec = pair.second;
-              if (std::find(vec.begin(), vec.end(), oldB) != vec.end()) {
-                fwd = pair.first;
-                break;
-              }
-            }
-            if (!fwd)
-              goto endCheck;
+            auto found = reverseBlockToPrimal.find(oldB);
+            if (found == reverseBlockToPrimal.end())
+                goto endCheck;
+            BasicBlock *fwd = found->second;
 
             SmallVector<BasicBlock *, 2> predBlocks;
             predBlocks.push_back(bi2->getSuccessor(0));
@@ -876,6 +869,7 @@ Value *GradientUtils::unwrapM(Value *const val, IRBuilder<> &BuilderM,
               blocks[i]->moveAfter(last);
               last = blocks[i];
               reverseBlocks[fwd].push_back(blocks[i]);
+              reverseBlockToPrimal[blocks[i]] = fwd;
               IRBuilder<> B(blocks[i]);
 
               unwrap_cache[blocks[i]] = unwrap_cache[oldB];
@@ -899,6 +893,7 @@ Value *GradientUtils::unwrapM(Value *const val, IRBuilder<> &BuilderM,
                   reverseBlocks[fwd].erase(std::find(reverseBlocks[fwd].begin(),
                                                      reverseBlocks[fwd].end(),
                                                      blocks[j]));
+                  reverseBlockToPrimal.erase(blocks[j]);
                   unwrap_cache.erase(blocks[j]);
                   lookup_cache.erase(blocks[j]);
                   SmallVector<Instruction *, 4> toErase;
@@ -939,6 +934,7 @@ Value *GradientUtils::unwrapM(Value *const val, IRBuilder<> &BuilderM,
 
             BuilderM.SetInsertPoint(bret);
             reverseBlocks[fwd].push_back(bret);
+            reverseBlockToPrimal[bret] = fwd;
             auto toret = BuilderM.CreatePHI(val->getType(), vals.size());
             for (size_t i = 0; i < vals.size(); i++)
               toret->addIncoming(vals[i], endingBlocks[i]);
@@ -992,17 +988,10 @@ Value *GradientUtils::unwrapM(Value *const val, IRBuilder<> &BuilderM,
       if (BuilderM.GetInsertPoint() != oldB->end())
         goto endCheck;
 
-      // todo speed this up
-      BasicBlock *fwd = nullptr;
-      for (const auto &pair : reverseBlocks) {
-        const std::vector<BasicBlock *> &vec = pair.second;
-        if (std::find(vec.begin(), vec.end(), oldB) != vec.end()) {
-          fwd = pair.first;
-          break;
-        }
-      }
-      if (!fwd)
+      auto found = reverseBlockToPrimal.find(oldB);
+      if (found == reverseBlockToPrimal.end())
         goto endCheck;
+      BasicBlock *fwd = found->second;
 
       SmallVector<BasicBlock *, 2> predBlocks;
       Value *cond = nullptr;
@@ -1046,6 +1035,7 @@ Value *GradientUtils::unwrapM(Value *const val, IRBuilder<> &BuilderM,
         blocks[i]->moveAfter(last);
         last = blocks[i];
         reverseBlocks[fwd].push_back(blocks[i]);
+        reverseBlockToPrimal[blocks[i]] = fwd;
         IRBuilder<> B(blocks[i]);
 
         unwrap_cache[blocks[i]] = unwrap_cache[oldB];
@@ -1067,6 +1057,7 @@ Value *GradientUtils::unwrapM(Value *const val, IRBuilder<> &BuilderM,
             reverseBlocks[fwd].erase(std::find(reverseBlocks[fwd].begin(),
                                                reverseBlocks[fwd].end(),
                                                blocks[j]));
+            reverseBlockToPrimal.erase(blocks[j]);
             unwrap_cache.erase(blocks[j]);
             lookup_cache.erase(blocks[j]);
             SmallVector<Instruction *, 4> toErase;
@@ -1102,6 +1093,7 @@ Value *GradientUtils::unwrapM(Value *const val, IRBuilder<> &BuilderM,
       }
       BuilderM.SetInsertPoint(bret);
       reverseBlocks[fwd].push_back(bret);
+      reverseBlockToPrimal[bret] = fwd;
       auto toret = BuilderM.CreatePHI(val->getType(), vals.size());
       for (size_t i = 0; i < vals.size(); i++)
         toret->addIncoming(vals[i], endingBlocks[i]);
