@@ -23,8 +23,10 @@
 // LLVM instructions.
 //
 //===----------------------------------------------------------------------===//
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
@@ -3723,6 +3725,117 @@ public:
 
     if (funcName.startswith("MPI_") && !gutils->isConstantInstruction(&call)) {
       handleMPI(call, called, funcName);
+      return;
+    }
+
+    if (funcName == "cblas_ddot") {
+      Type *castvals[2] = {call.getArgOperand(1)->getType(),
+                           call.getArgOperand(3)->getType()};
+      auto tupletype = StructType::get(call.getContext(), ArrayRef(castvals));
+      Value *tupleholder = BuilderZ.CreateAlloca(tupletype);
+      auto structarg1 = BuilderZ.CreateStructGEP(tupleholder, 0);
+      auto structarg2 = BuilderZ.CreateStructGEP(tupleholder, 1);
+      if (Mode == DerivativeMode::ReverseModeCombined ||
+          Mode == DerivativeMode::ReverseModePrimal) {
+        auto size =
+            ConstantExpr::getSizeOf(Type::getDoubleTy(call.getContext()));
+        auto malins1 = CallInst::CreateMalloc(
+            gutils->getNewFromOriginal(&call), size->getType(),
+            Type::getDoubleTy(call.getContext()), size, call.getArgOperand(0),
+            nullptr, "");
+        auto malins2 = CallInst::CreateMalloc(
+            gutils->getNewFromOriginal(&call), size->getType(),
+            Type::getDoubleTy(call.getContext()), size, call.getArgOperand(0),
+            nullptr, "");
+        BuilderZ.SetInsertPoint(gutils->getNewFromOriginal(&call));
+        Value *arg1 = BuilderZ.CreateBitCast(
+            malins1, Type::getDoublePtrTy(call.getContext()));
+        Value *arg2 = BuilderZ.CreateBitCast(
+            malins2, Type::getDoublePtrTy(call.getContext()));
+        auto *newcall = dyn_cast<CallInst>(gutils->getNewFromOriginal(&call));
+        auto memcpy_size1 =
+            (int)(call.getFunction()
+                      ->getParent()
+                      ->getDataLayout()
+                      .getTypeAllocSize(newcall->getArgOperand(1)->getType())) *
+            dyn_cast<ConstantInt>(call.getArgOperand(0))->getSExtValue();
+        auto memcpy_size2 =
+            (int)(call.getFunction()
+                      ->getParent()
+                      ->getDataLayout()
+                      .getTypeAllocSize(newcall->getArgOperand(3)->getType())) *
+            dyn_cast<ConstantInt>(call.getArgOperand(0))->getSExtValue();
+#if LLVM_VERSION_MAJOR >= 10
+        BuilderZ.CreateMemCpy(arg1, MaybeAlign(), newcall->getArgOperand(1),
+                              MaybeAlign(), memcpy_size1);
+        BuilderZ.CreateMemCpy(arg2, MaybeAlign(), newcall->getArgOperand(3),
+                              MaybeAlign(), memcpy_size2);
+#else
+        BuilderZ.CreateMemCpy(arg1, 0, newcall->getArgOperand(1), 0,
+                              memcpy_size1);
+        BuilderZ.CreateMemCpy(arg2, 0, newcall->getArgOperand(3), 0,
+                              memcpy_size2);
+#endif
+        BuilderZ.CreateStore(arg1, structarg1);
+        BuilderZ.CreateStore(arg2, structarg2);
+        gutils->cacheForReverse(BuilderZ, tupleholder,
+                                getIndex(&call, CacheType::Tape));
+      }
+      if (Mode == DerivativeMode::ReverseModeCombined ||
+          Mode == DerivativeMode::ReverseModeGradient) {
+        IRBuilder<> Builder2(call.getParent());
+        getReverseBuilder(Builder2);
+
+        assert(!isa<Constant>(orig->getArgOperand(3)));
+        Value *D1 = gutils->invertPointerM(orig->getArgOperand(3), Builder2);
+        assert(!isa<Constant>(orig->getArgOperand(1)));
+        Value *D2 = gutils->invertPointerM(orig->getArgOperand(1), Builder2);
+
+        if (Mode == DerivativeMode::ReverseModeGradient) {
+          Builder2.CreateStore(
+              Builder2.CreatePHI(call.getArgOperand(1)->getType(), 0),
+              structarg1);
+          Builder2.CreateStore(
+              Builder2.CreatePHI(call.getArgOperand(3)->getType(), 0),
+              structarg2);
+        }
+        tupleholder = gutils->cacheForReverse(Builder2, tupleholder,
+                                              getIndex(&call, CacheType::Tape));
+        structarg1 = BuilderZ.CreateStructGEP(tupleholder, 0);
+        structarg2 = BuilderZ.CreateStructGEP(tupleholder, 1);
+        auto loadsarg1 =
+            Builder2.CreateLoad(Type::getDoublePtrTy(called->getContext()),
+                                lookup(structarg1, Builder2));
+        auto loadsarg2 =
+            Builder2.CreateLoad(Type::getDoublePtrTy(called->getContext()),
+                                lookup(structarg2, Builder2));
+        SmallVector<Value *, 6> args1 = {
+            lookup(gutils->getNewFromOriginal(orig->getArgOperand(0)),
+                   Builder2),
+            diffe(orig, Builder2),
+            loadsarg1,
+            Builder2.getInt32(1),
+            D1,
+            Builder2.getInt32(1)};
+        SmallVector<Value *, 6> args2 = {
+            lookup(gutils->getNewFromOriginal(orig->getArgOperand(0)),
+                   Builder2),
+            diffe(orig, Builder2),
+            loadsarg2,
+            Builder2.getInt32(1),
+            D2,
+            Builder2.getInt32(1)};
+        auto daxpycall = gutils->oldFunc->getParent()->getOrInsertFunction(
+            "cblas_daxpy", Builder2.getVoidTy(), Builder2.getInt32Ty(),
+            Builder2.getDoubleTy(), Type::getDoublePtrTy(called->getContext()),
+            Builder2.getInt32Ty(), Type::getDoublePtrTy(called->getContext()),
+            Builder2.getInt32Ty());
+        auto firstdcall = Builder2.CreateCall(daxpycall, args1);
+        auto seconddcall = Builder2.CreateCall(daxpycall, args2);
+        setDiffe(orig, Constant::getNullValue(orig->getType()), Builder2);
+        CallInst::CreateFree(loadsarg1, firstdcall->getNextNode());
+        CallInst::CreateFree(loadsarg2, seconddcall->getNextNode());
+      }
       return;
     }
 
