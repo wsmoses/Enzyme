@@ -492,8 +492,14 @@ void TypeAnalyzer::addToWorkList(Value *Val) {
       llvm::errs() << "inst: " << *I << "\n";
     }
     assert(fntypeinfo.Function == I->getParent()->getParent());
-  } else if (auto Arg = dyn_cast<Argument>(Val))
+  } else if (auto Arg = dyn_cast<Argument>(Val)) {
+    if (fntypeinfo.Function != Arg->getParent()) {
+        llvm::errs() << "fn: " << *fntypeinfo.Function << "\n";
+        llvm::errs() << "argparen: " << *Arg->getParent() << "\n";
+        llvm::errs() << "val: " << *Arg << "\n";
+    }
     assert(fntypeinfo.Function == Arg->getParent());
+  }
 
   // Add to workList
   workList.insert(Val);

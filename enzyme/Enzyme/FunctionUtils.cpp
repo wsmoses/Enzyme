@@ -310,6 +310,7 @@ static inline void UpgradeAllocasToMallocs(Function *NewF,
     if (auto C = dyn_cast<CastInst>(rep))
       CI = cast<CallInst>(C->getOperand(0));
     CI->setMetadata("enzyme_fromstack", MDNode::get(CI->getContext(), {}));
+    CI->addAttribute(AttributeList::ReturnIndex, Attribute::NoAlias);
     assert(rep->getType() == AI->getType());
     AI->replaceAllUsesWith(rep);
     AI->eraseFromParent();
@@ -602,6 +603,56 @@ void PreProcessCache::ReplaceReallocs(Function *NewF, bool mem2reg) {
   FAM.invalidate(*NewF, PA);
 }
 
+Function* CreateMPIWrapper(Function* F) {
+    std::string name = ("enzyme_wrapmpi$$" + F->getName() + "#").str();
+    if (auto W = F->getParent()->getFunction(name))
+        return W;
+    Type* types = {F->getFunctionType()->getParamType(0)};
+    auto FT = FunctionType::get(F->getReturnType(), types, false);
+    Function *W = Function::Create(FT, GlobalVariable::InternalLinkage, name, F->getParent());
+    W->addAttribute(AttributeList::FunctionIndex, Attribute::ReadOnly);
+    W->addAttribute(AttributeList::FunctionIndex, Attribute::InaccessibleMemOnly);
+    W->addAttribute(AttributeList::FunctionIndex, Attribute::get(F->getContext(), "enzyme_inactive"));
+    W->addAttribute(AttributeList::FunctionIndex, Attribute::Speculatable);
+    W->addAttribute(AttributeList::FunctionIndex, Attribute::NoUnwind);
+#if LLVM_VERSION_MAJOR >= 10
+    W->addAttribute(AttributeList::FunctionIndex, Attribute::NoFree);
+    W->addAttribute(AttributeList::FunctionIndex, Attribute::NoSync);
+#endif
+    BasicBlock *entry =
+        BasicBlock::Create(W->getContext(), "entry", W);
+    IRBuilder<> B(entry);
+    auto alloc = B.CreateAlloca(F->getReturnType());
+    Value *args[] = {W->arg_begin(), alloc};
+    B.CreateCall(F, args);
+    B.CreateRet(B.CreateLoad(alloc));
+    return W;
+}
+static void SimplifyMPIQueries(Function &NewF) {
+  SmallVector<CallInst*, 4> Todo;
+  for (auto &BB : NewF) {
+    for (auto &I : BB) {
+      if (auto CI = dyn_cast<CallInst>(&I)) {
+        if (CI->getCalledFunction() == nullptr)
+            continue;
+        if (CI->getCalledFunction()->getName() == "MPI_Comm_rank" || CI->getCalledFunction()->getName() == "MPI_Comm_size") {
+            if (!CI->use_empty()) {
+                continue;
+            }
+            Todo.push_back(CI);
+        }
+      }
+    }
+  }
+  for (auto CI : Todo) {
+    IRBuilder<> B(CI);
+    Value *arg[] = {CI->getArgOperand(0)};
+    auto res = B.CreateCall(CreateMPIWrapper(CI->getCalledFunction()), arg);
+    B.CreateStore(res, CI->getArgOperand(1));
+    CI->eraseFromParent();
+  }
+}
+
 /// Perform recursive inlinining on NewF up to the given limit
 static void ForceRecursiveInlining(Function *NewF, size_t Limit) {
   std::map<const Function *, RecurType> RecurResults;
@@ -788,6 +839,12 @@ Function *PreProcessCache::preprocessForClone(Function *F,
       PreservedAnalyses PA;
       FAM.invalidate(*NewF, PA);
     }
+  }
+
+  if (true) {
+  SimplifyMPIQueries(*NewF);
+  PreservedAnalyses PA;
+  FAM.invalidate(*NewF, PA);
   }
 
   if (EnzymeLowerGlobals) {

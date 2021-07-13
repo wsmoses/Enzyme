@@ -1896,7 +1896,7 @@ bool GradientUtils::legalRecompute(const Value *val,
       if (n == "lgamma" || n == "lgammaf" || n == "lgammal" ||
           n == "lgamma_r" || n == "lgammaf_r" || n == "lgammal_r" ||
           n == "__lgamma_r_finite" || n == "__lgammaf_r_finite" ||
-          n == "__lgammal_r_finite" || isMemFreeLibMFunction(n)) {
+          n == "__lgammal_r_finite" || isMemFreeLibMFunction(n) || n.startswith("enzyme_wrapmpi$$")) {
         return true;
       }
     }
@@ -2066,7 +2066,7 @@ bool GradientUtils::shouldRecompute(const Value *val,
           n == "__lgamma_r_finite" || n == "__lgammaf_r_finite" ||
           n == "__lgammal_r_finite" || n == "tanh" || n == "tanhf" ||
           n == "__pow_finite" || n == "__fd_sincos_1" ||
-          isMemFreeLibMFunction(n) || n == "julia.pointer_from_objref") {
+          isMemFreeLibMFunction(n) || n == "julia.pointer_from_objref" || n.startswith("enzyme_wrapmpi$$")) {
         return true;
       }
     }
