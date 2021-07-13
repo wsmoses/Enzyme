@@ -57,21 +57,21 @@ entry:
 ; CHECK: invertb1:
 ; CHECK-NEXT:   %"g1'ipg_unwrap" = getelementptr inbounds double, double* %"a'", i32 32
 ; CHECK-NEXT:   %1 = load double, double* %"g1'ipg_unwrap", align 8
-; CHECK-NEXT:   %2 = fadd fast double %1, %11
+; CHECK-NEXT:   %2 = fadd fast double %1, %10
 ; CHECK-NEXT:   store double %2, double* %"g1'ipg_unwrap", align 8
 ; CHECK-NEXT:   br label %invertentry
 
 ; CHECK: invertb2: 
 ; CHECK-NEXT:   %"g2'ipg_unwrap" = getelementptr inbounds double, double* %"a'", i32 64
 ; CHECK-NEXT:   %3 = load double, double* %"g2'ipg_unwrap", align 8
-; CHECK-NEXT:   %4 = fadd fast double %3, %10
+; CHECK-NEXT:   %4 = fadd fast double %3, %9
 ; CHECK-NEXT:   store double %4, double* %"g2'ipg_unwrap", align 8
 ; CHECK-NEXT:   br label %invertentry
 
 ; CHECK: invertbdef:
 ; CHECK-NEXT:   %"g3'ipg_unwrap" = getelementptr inbounds double, double* %"a'", i32 128
 ; CHECK-NEXT:   %5 = load double, double* %"g3'ipg_unwrap", align 8
-; CHECK-NEXT:   %6 = fadd fast double %5, %9
+; CHECK-NEXT:   %6 = fadd fast double %5, %8
 ; CHECK-NEXT:   store double %6, double* %"g3'ipg_unwrap", align 8
 ; CHECK-NEXT:   br label %invertentry
 
@@ -99,15 +99,15 @@ entry:
 ; CHECK-NEXT:   br label %invertend_phimerge
 
 ; CHECK: invertend_phimerge: 
-; CHECK-NEXT:   %7 = phi {{(fast )?}}double [ %l1_unwrap, %invertend_phirc ], [ %l2_unwrap, %invertend_phirc1 ], [ %l3_unwrap, %invertend_phirc2 ]
-; CHECK-NEXT:   %m0diffep = fmul fast double %0, %7
-; CHECK-NEXT:   %8 = fadd fast double %m0diffep, %m0diffep
+; CHECK-NEXT:   %p_unwrap = phi {{(fast )?}}double [ %l1_unwrap, %invertend_phirc ], [ %l2_unwrap, %invertend_phirc1 ], [ %l3_unwrap, %invertend_phirc2 ]
+; CHECK-NEXT:   %m0diffep = fmul fast double %0, %p_unwrap
+; CHECK-NEXT:   %7 = fadd fast double %m0diffep, %m0diffep
 ; CHECK-NEXT:   %anot1_ = xor i1 %c1_unwrap, true
 ; CHECK-NEXT:   %bnot1_ = xor i1 %c2_unwrap, true
 ; CHECK-NEXT:   %andVal1 = and i1 %bnot1_, %anot1_
-; CHECK-NEXT:   %9 = select {{(fast )?}}i1 %c1_unwrap, double %8, double 0.000000e+00
-; CHECK-NEXT:   %10 = select {{(fast )?}}i1 %andVal1, double %8, double 0.000000e+00
-; CHECK-NEXT:   %11 = select {{(fast )?}}i1 %c2_unwrap, double %8, double 0.000000e+00
+; CHECK-NEXT:   %8 = select {{(fast )?}}i1 %c1_unwrap, double %7, double 0.000000e+00
+; CHECK-NEXT:   %9 = select {{(fast )?}}i1 %andVal1, double %7, double 0.000000e+00
+; CHECK-NEXT:   %10 = select {{(fast )?}}i1 %c2_unwrap, double %7, double 0.000000e+00
 ; CHECK-NEXT:   br i1 %c1_unwrap, label %invertbdef, label %staging
 
 ; CHECK: staging:

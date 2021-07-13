@@ -277,8 +277,9 @@ llvm::Value *getOrInsertOpFloatSum(llvm::Module &M, llvm::Type *OpPtr,
   assert(CT.isFloat());
   auto FlT = CT.isFloat();
 
-  if (auto Glob = M.getGlobalVariable(name))
-    return Glob;
+  if (auto Glob = M.getGlobalVariable(name)) {
+    return B2.CreateLoad(Glob);
+  }
 
   std::vector<llvm::Type *> types = {PointerType::getUnqual(FlT),
                                      PointerType::getUnqual(FlT),
@@ -414,5 +415,70 @@ llvm::Value *getOrInsertOpFloatSum(llvm::Module &M, llvm::Type *OpPtr,
   }
 
   B2.CreateCall(M.getFunction(name + "initializer"));
-  return GV;
+  return B2.CreateLoad(GV);
+}
+
+Function *getOrInsertExponentialAllocator(Module &M, PointerType *T) {
+  Type* types[] = {T, Type::getInt64Ty(M.getContext())};
+  std::string O;
+  llvm::raw_string_ostream SS(O);
+  T->getElementType()->print(SS);
+  std::string name = "__enzyme_exonentialallocation@"+SS.str();
+  FunctionType *FT =
+      FunctionType::get(T, types, false);
+
+#if LLVM_VERSION_MAJOR >= 9
+  Function *F = cast<Function>(M.getOrInsertFunction(name, FT).getCallee());
+#else
+  Function *F = cast<Function>(M.getOrInsertFunction(name, FT));
+#endif
+
+  if (!F->empty())
+    return F;
+
+  F->setLinkage(Function::LinkageTypes::InternalLinkage);
+  F->addFnAttr(Attribute::AlwaysInline);
+  F->addFnAttr(Attribute::NoUnwind);
+  BasicBlock *entry = BasicBlock::Create(M.getContext(), "entry", F);
+  BasicBlock *grow = BasicBlock::Create(M.getContext(), "grow", F);
+  BasicBlock *ok = BasicBlock::Create(M.getContext(), "ok", F);
+
+  IRBuilder <>B(entry);
+
+  auto ptr = F->arg_begin();
+  ptr->setName("ptr");
+  Value *size = ptr + 1;
+  size->setName("size");
+
+  Value *hasOne = B.CreateTrunc(size, Type::getInt1Ty(M.getContext()));
+  auto popCnt = Intrinsic::getDeclaration(&M, Intrinsic::ctpop, std::vector<Type*>({types[1]}));
+  
+  B.CreateCondBr(B.CreateAnd(B.CreateICmpULE(B.CreateCall(popCnt, std::vector<Value*>({size})), ConstantInt::get(types[1], 2, false)), hasOne), grow, ok);
+
+  B.SetInsertPoint(grow);
+  
+  auto lz = B.CreateCall(Intrinsic::getDeclaration(&M, Intrinsic::ctlz, std::vector<Type*>({types[1]})), std::vector<Value*>({size, ConstantInt::getFalse(M.getContext())}));
+  Value *next = B.CreateShl(ConstantInt::get(types[1], 1, false), B.CreateSub(ConstantInt::get(types[1], 64, false), lz, "", true, true));
+
+
+  next = B.CreateMul(next, ConstantInt::get(size->getType(),
+                                 M.getDataLayout()
+                                         .getTypeAllocSizeInBits(T->getElementType()) /
+                                     8),
+                "", /*NUW*/ true, /*NSW*/ true);
+  
+  Type *BPTy = Type::getInt8PtrTy(T->getContext());
+  auto reallocF = M.getOrInsertFunction(
+      "realloc", BPTy, BPTy, Type::getInt64Ty(M.getContext()));
+
+  Value *args[] = {B.CreatePointerCast(ptr, BPTy), next};
+  Value *gVal = B.CreatePointerCast(B.CreateCall(reallocF, args), ptr->getType());
+
+  B.CreateBr(ok);
+  B.SetInsertPoint(ok);
+  auto phi = B.CreatePHI(ptr->getType(), 2);
+  phi->addIncoming(gVal, grow);
+  phi->addIncoming(ptr, entry);
+  B.CreateRet(phi);
+  return F;
 }

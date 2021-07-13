@@ -85,11 +85,6 @@ cl::opt<bool> nonmarkedglobals_inactiveloads(
     cl::desc("Consider loads of nonmarked globals to be inactive"));
 }
 
-bool is_load_uncacheable(
-    LoadInst &li, AAResults &AA, Function *oldFunc, TargetLibraryInfo &TLI,
-    const SmallPtrSetImpl<const Instruction *> &unnecessaryInstructions,
-    const std::map<Argument *, bool> &uncacheable_args, DerivativeMode mode);
-
 struct CacheAnalysis {
   AAResults &AA;
   Function *oldFunc;
@@ -485,9 +480,13 @@ struct CacheAnalysis {
       return {};
     }
 
-    if (isCertainMallocOrFree(callsite_op->getCalledFunction())) {
+    if (isCertainPrintMallocOrFree(callsite_op->getCalledFunction())) {
       return {};
     }
+
+    if (callsite_op->getCalledFunction()->getName().startswith("MPI_") || callsite_op->getCalledFunction()->getName().startswith("enzyme_wrapmpi$$"))
+      return {};
+
     std::vector<Value *> args;
     std::vector<bool> args_safe;
 
@@ -537,7 +536,7 @@ struct CacheAnalysis {
             }
           }
         }
-        if (called && isCertainMallocOrFree(called)) {
+        if (called && isCertainPrintMallocOrFree(called)) {
           return false;
         }
         if (called && isMemFreeLibMFunction(called->getName())) {

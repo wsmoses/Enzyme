@@ -659,7 +659,7 @@ AllocaInst *CacheUtility::createCacheForScope(LimitContext ctx, Type *T,
   assert(ctx.Block);
   assert(T);
 
-  auto sublimits = getSubLimits(/*inForwardPass*/ true, nullptr, ctx);
+  auto sublimits = getSubLimits(/*inForwardPass*/ true, nullptr, ctx, extraSize);
 
   // List of types stored in the cache for each Loop-Chunk
   // This is stored from innner-most chunk to outermost
@@ -695,8 +695,6 @@ AllocaInst *CacheUtility::createCacheForScope(LimitContext ctx, Type *T,
   }
 
   Type *BPTy = Type::getInt8PtrTy(T->getContext());
-  auto realloc = newFunc->getParent()->getOrInsertFunction(
-      "realloc", BPTy, BPTy, Type::getInt64Ty(T->getContext()));
 
   Value *storeInto = alloc;
 
@@ -729,9 +727,17 @@ AllocaInst *CacheUtility::createCacheForScope(LimitContext ctx, Type *T,
             ConstantInt::get(Type::getInt64Ty(T->getContext()), 3));
       }
       if (extraSize && i == 0) {
+        ValueToValueMapTy available;
+        for (auto &sl : sublimits) {
+            for (auto &cl : sl.second) {
+                if (cl.first.var)
+                    available[cl.first.var] = cl.first.var;
+            }
+        }
         Value *es = unwrapM(extraSize, allocationBuilder,
-                            /*available*/ ValueToValueMapTy(),
+                            /*available*/available,
                             UnwrapMode::AttemptFullUnwrapWithLookup);
+
         assert(es);
         size = allocationBuilder.CreateMul(size, es, "", /*NUW*/ true,
                                            /*NSW*/ true);
@@ -819,11 +825,10 @@ AllocaInst *CacheUtility::createCacheForScope(LimitContext ctx, Type *T,
                                      8),
                 realloc_size, "", /*NUW*/ true, /*NSW*/ true)};
 
+        assert(cast<PointerType>(allocation->getType())->getElementType() == myType);
         Value *realloccall = nullptr;
-        allocation = build.CreatePointerCast(
-            realloccall =
-                build.CreateCall(realloc, idxs, name + "_realloccache"),
-            allocation->getType(), name + "_realloccast");
+        allocation = realloccall = build.CreateCall(getOrInsertExponentialAllocator(*newFunc->getParent(), cast<PointerType>(allocation->getType())), std::vector<Value*>({allocation, realloc_size}),
+                name + "_realloccache");
         scopeAllocs[alloc].push_back(cast<CallInst>(realloccall));
         storealloc = build.CreateStore(allocation, storeInto);
         // Unlike the static case we can not mark the memory as invariant
@@ -947,7 +952,9 @@ Value *CacheUtility::computeIndexOfChunk(
 /// innermost loop to outermost loop.
 CacheUtility::SubLimitType CacheUtility::getSubLimits(bool inForwardPass,
                                                       IRBuilder<> *RB,
-                                                      LimitContext ctx) {
+                                                      LimitContext ctx,
+                                                      llvm::Value *extraSize) {
+  std::vector<LoopContext> contexts;
   // Given a ``SingleIteration'' Limit Context, return a chunking of
   // one loop with size 1, and header/preheader of the BasicBlock
   // This is done to create a context for a block outside a loop
@@ -969,13 +976,12 @@ CacheUtility::SubLimitType CacheUtility::getSubLimits(bool inForwardPass,
     idx.dynamic = false;
     idx.parent = nullptr;
     idx.exitBlocks = {};
-    SubLimitType sublimits;
-    sublimits.push_back({one, {{idx, one}}});
-    return sublimits;
+    //sublimits.push_back({one, {{idx, one}}});
+    contexts.push_back(idx);
+    //return sublimits;
   }
 
   // Store the LoopContext's in InnerMost => Outermost order
-  std::vector<LoopContext> contexts;
   for (BasicBlock *blk = ctx.Block; blk != nullptr;) {
     LoopContext idx;
     if (!getContext(blk, idx, ctx.ReverseLimit)) {
@@ -1060,6 +1066,17 @@ CacheUtility::SubLimitType CacheUtility::getSubLimits(bool inForwardPass,
         allocationBuilder.SetInsertPoint(&allocationPreheaders[i]->back());
         limitMinus1 = unwrapM(contexts[i].maxLimit, allocationBuilder, prevMap,
                               UnwrapMode::AttemptFullUnwrap);
+      } else if (i == 0 && extraSize && unwrapM(extraSize, allocationBuilder, prevMap, UnwrapMode::AttemptFullUnwrap) == nullptr) {
+        EmitWarning("NoOuterLimit",
+                    cast<Instruction>(extraSize)->getDebugLoc(),
+                    newFunc,
+                    cast<Instruction>(extraSize)->getParent(),
+                    "Could not compute outermost loop limit by moving extraSize value ",
+                    *extraSize, " computed at block",
+                    contexts[i].header->getName(), " function ",
+                    contexts[i].header->getParent()->getName());
+        allocationPreheaders[i] = contexts[i].preheader;
+        allocationBuilder.SetInsertPoint(&allocationPreheaders[i]->back());
       }
       assert(limitMinus1 != nullptr);
 
@@ -1298,7 +1315,7 @@ Value *CacheUtility::getCachePointer(bool inForwardPass, IRBuilder<> &BuilderM,
   assert(ctx.Block);
   assert(cache);
 
-  auto sublimits = getSubLimits(inForwardPass, &BuilderM, ctx);
+  auto sublimits = getSubLimits(inForwardPass, &BuilderM, ctx, extraSize);
 
   ValueToValueMapTy available;
 

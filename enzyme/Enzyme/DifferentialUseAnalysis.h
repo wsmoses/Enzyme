@@ -134,6 +134,24 @@ static inline bool is_use_directly_needed_in_reverse(
     return !gutils->isConstantValue(const_cast<SelectInst *>(si));
   }
 
+  if (auto CI = dyn_cast<CallInst>(user)) {
+    if (auto F = CI->getCalledFunction()) {
+      // Only need primal length and datatype for reverse
+      if (F->getName() == "MPI_Isend" || F->getName() == "MPI_Irecv") {
+        if (val != CI->getArgOperand(1) && val != CI->getArgOperand(2)) {
+          return false;
+        }
+      }
+      // Don't need any primal arguments for mpi_wait
+      if (F->getName() == "MPI_Wait")
+          return false;
+      // Only need element count for reverse of waitall
+      if (F->getName() == "MPI_Waitall")
+          if (val != CI->getArgOperand(0))
+              return false;
+    }
+  }
+
   return !gutils->isConstantInstruction(user) ||
          !gutils->isConstantValue(const_cast<Instruction *>(user));
 }

@@ -492,8 +492,14 @@ void TypeAnalyzer::addToWorkList(Value *Val) {
       llvm::errs() << "inst: " << *I << "\n";
     }
     assert(fntypeinfo.Function == I->getParent()->getParent());
-  } else if (auto Arg = dyn_cast<Argument>(Val))
+  } else if (auto Arg = dyn_cast<Argument>(Val)) {
+    if (fntypeinfo.Function != Arg->getParent()) {
+        llvm::errs() << "fn: " << *fntypeinfo.Function << "\n";
+        llvm::errs() << "argparen: " << *Arg->getParent() << "\n";
+        llvm::errs() << "val: " << *Arg << "\n";
+    }
     assert(fntypeinfo.Function == Arg->getParent());
+  }
 
   // Add to workList
   workList.insert(Val);
@@ -740,6 +746,31 @@ void TypeAnalyzer::considerTBAA() {
           updateAnalysis(call->getOperand(0), update.Only(-1), call);
           updateAnalysis(call->getOperand(1), update.Only(-1), call);
           continue;
+        } else if (call->getCalledFunction() &&
+            call->getCalledFunction()->getIntrinsicID() == Intrinsic::masked_gather) {
+          auto VT = cast<VectorType>(call->getType());
+          auto LoadSize = (DL.getTypeSizeInBits(VT) + 7) / 8;
+          TypeTree req = vdptr.Only(-1);
+          updateAnalysis(call, req.Lookup(LoadSize, DL), call);
+#if 0
+          // TODO propagate to both the ptrs and passthrough 
+          auto vdptr
+                           // Cut off any values outside of load
+                           .ShiftIndices(DL, /*init offset*/ 0,
+                                         /*max size*/ LoadSize,
+                                         /*new offset*/ 0)
+                           // Don't propagate "Anything" into ptr
+                           .PurgeAnything()
+                           .Only(-1),
+                       LI);
+          if (auto CV = dyn_cast<ConstantVector>(call->getArgOperand(2))) {
+              for (int i=0; i<VT->getNumElements(); ++i) {
+                if (cast<ConstantInt>(CV->getOperand(i))->getValue()) {
+                    updateAnalysis(call->getArgOperand(1), 
+                }
+              }
+          }
+#endif
         } else if (call->getType()->isPointerTy()) {
           updateAnalysis(call, vdptr.Only(-1), call);
         } else {
@@ -3123,6 +3154,8 @@ void TypeAnalyzer::visitCallInst(CallInst &call) {
       return;
     }
     /// MPI
+    if (funcName.startswith("PMPI_"))
+        funcName = funcName.substr(1);
     if (funcName == "MPI_Init") {
       TypeTree ptrint;
       ptrint.insert({-1}, BaseType::Pointer);
@@ -3175,7 +3208,21 @@ void TypeAnalyzer::visitCallInst(CallInst &call) {
       return;
     }
     if (funcName == "MPI_Isend" || funcName == "MPI_Irecv") {
-      updateAnalysis(call.getOperand(0), TypeTree(BaseType::Pointer).Only(-1),
+      TypeTree buf = TypeTree(BaseType::Pointer);
+
+      if (Constant *C = dyn_cast<Constant>(call.getOperand(2))) {
+        while (ConstantExpr *CE = dyn_cast<ConstantExpr>(C)) {
+          C = CE->getOperand(0);
+        }
+        if (auto GV = dyn_cast<GlobalVariable>(C)) {
+          if (GV->getName() == "ompi_mpi_double") {
+            buf.insert({0}, Type::getDoubleTy(C->getContext()));
+          } else if (GV->getName() == "ompi_mpi_float") {
+            buf.insert({0}, Type::getFloatTy(C->getContext()));
+          }
+        }
+      }
+      updateAnalysis(call.getOperand(0), buf.Only(-1),
                      &call);
       updateAnalysis(call.getOperand(1), TypeTree(BaseType::Integer).Only(-1),
                      &call);
@@ -3228,29 +3275,42 @@ void TypeAnalyzer::visitCallInst(CallInst &call) {
       updateAnalysis(&call, TypeTree(BaseType::Integer).Only(-1), &call);
       return;
     }
-    if (funcName == "MPI_Reduce") {
+    if (funcName == "MPI_Reduce" || funcName == "PMPI_Reduce") {
+      // int MPI_Reduce(const void *sendbuf, void *recvbuf, int count,
+      // MPI_Datatype datatype,
+      //         MPI_Op op, int root, MPI_Comm comm)
+      // sendbuf
       updateAnalysis(call.getOperand(0), TypeTree(BaseType::Pointer).Only(-1),
                      &call);
+      // recvbuf
       updateAnalysis(call.getOperand(1), TypeTree(BaseType::Pointer).Only(-1),
                      &call);
+      // count
       updateAnalysis(call.getOperand(2), TypeTree(BaseType::Integer).Only(-1),
                      &call);
-      updateAnalysis(call.getOperand(4), TypeTree(BaseType::Integer).Only(-1),
-                     &call);
-      updateAnalysis(call.getOperand(5), TypeTree(BaseType::Integer).Only(-1),
-                     &call);
+      // datatype
+      // op
+      // comm
+      // result
       updateAnalysis(&call, TypeTree(BaseType::Integer).Only(-1), &call);
       return;
     }
     if (funcName == "MPI_Allreduce") {
+      // int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count,
+      //             MPI_Datatype datatype, MPI_Op op, MPI_Comm comm)
+      // sendbuf
       updateAnalysis(call.getOperand(0), TypeTree(BaseType::Pointer).Only(-1),
                      &call);
+      // recvbuf
       updateAnalysis(call.getOperand(1), TypeTree(BaseType::Pointer).Only(-1),
                      &call);
+      // count
       updateAnalysis(call.getOperand(2), TypeTree(BaseType::Integer).Only(-1),
                      &call);
-      updateAnalysis(call.getOperand(4), TypeTree(BaseType::Integer).Only(-1),
-                     &call);
+      // datatype
+      // op
+      // comm
+      // result
       updateAnalysis(&call, TypeTree(BaseType::Integer).Only(-1), &call);
       return;
     }
@@ -3306,6 +3366,18 @@ void TypeAnalyzer::visitCallInst(CallInst &call) {
       updateAnalysis(call.getOperand(4), TypeTree(BaseType::Integer).Only(-1),
                      &call);
       updateAnalysis(call.getOperand(6), TypeTree(BaseType::Integer).Only(-1),
+                     &call);
+      updateAnalysis(&call, TypeTree(BaseType::Integer).Only(-1), &call);
+      return;
+    }
+    if (funcName == "MPI_Allgather") {
+      updateAnalysis(call.getOperand(0), TypeTree(BaseType::Pointer).Only(-1),
+                     &call);
+      updateAnalysis(call.getOperand(1), TypeTree(BaseType::Integer).Only(-1),
+                     &call);
+      updateAnalysis(call.getOperand(3), TypeTree(BaseType::Pointer).Only(-1),
+                     &call);
+      updateAnalysis(call.getOperand(4), TypeTree(BaseType::Integer).Only(-1),
                      &call);
       updateAnalysis(&call, TypeTree(BaseType::Integer).Only(-1), &call);
       return;
@@ -4154,8 +4226,13 @@ ConcreteType TypeAnalysis::firstPointer(size_t num, Value *val,
                                         bool pointerIntSame) {
   assert(val);
   assert(val->getType());
-  assert(val->getType()->isPointerTy());
   auto q = query(val, fn).Data0();
+  if (!(val->getType()->isPointerTy() || q[{}] == BaseType::Pointer)) {
+      llvm::errs() << *fn.Function << "\n";
+      analyzedFunctions.find(fn)->second.dump();
+      llvm::errs() << "val: " << *val << "\n";
+  }
+  assert(val->getType()->isPointerTy() || q[{}] == BaseType::Pointer);
   auto dt = q[{0}];
   dt.orIn(q[{-1}], pointerIntSame);
   for (size_t i = 1; i < num; ++i) {

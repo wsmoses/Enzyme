@@ -47,14 +47,14 @@ entry:
 ; CHECK: invertb1:                                         ; preds = %invertend_phimerge
 ; CHECK-NEXT:   %"g1'ipg_unwrap" = getelementptr inbounds double, double* %"a'", i32 32
 ; CHECK-NEXT:   %1 = load double, double* %"g1'ipg_unwrap", align 8
-; CHECK-NEXT:   %2 = fadd fast double %1, %8
+; CHECK-NEXT:   %2 = fadd fast double %1, %7
 ; CHECK-NEXT:   store double %2, double* %"g1'ipg_unwrap", align 8
 ; CHECK-NEXT:   br label %invertentry
 
 ; CHECK: invertb2:                                         ; preds = %invertend_phimerge
 ; CHECK-NEXT:   %"g2'ipg_unwrap" = getelementptr inbounds double, double* %"a'", i32 64
 ; CHECK-NEXT:   %3 = load double, double* %"g2'ipg_unwrap", align 8
-; CHECK-NEXT:   %4 = fadd fast double %3, %7
+; CHECK-NEXT:   %4 = fadd fast double %3, %6
 ; CHECK-NEXT:   store double %4, double* %"g2'ipg_unwrap", align 8
 ; CHECK-NEXT:   br label %invertentry
 
@@ -72,11 +72,11 @@ entry:
 ; CHECK-NEXT:   br label %invertend_phimerge
 
 ; CHECK: invertend_phimerge:                               ; preds = %invertend_phirc1, %invertend_phirc
-; CHECK-NEXT:   %5 = phi {{(fast )?}}double [ %l1_unwrap, %invertend_phirc ], [ %l2_unwrap, %invertend_phirc1 ]
-; CHECK-NEXT:   %m0diffep = fmul fast double %0, %5
-; CHECK-NEXT:   %6 = fadd fast double %m0diffep, %m0diffep
-; CHECK-NEXT:   %7 = select {{(fast )?}}i1 %cmp2, double 0.000000e+00, double %6
-; CHECK-NEXT:   %8 = select {{(fast )?}}i1 %cmp2, double %6, double 0.000000e+00
+; CHECK-NEXT:   %p_unwrap = phi {{(fast )?}}double [ %l1_unwrap, %invertend_phirc ], [ %l2_unwrap, %invertend_phirc1 ]
+; CHECK-NEXT:   %m0diffep = fmul fast double %0, %p_unwrap
+; CHECK-NEXT:   %5 = fadd fast double %m0diffep, %m0diffep
+; CHECK-NEXT:   %6 = select {{(fast )?}}i1 %cmp2, double 0.000000e+00, double %5
+; CHECK-NEXT:   %7 = select {{(fast )?}}i1 %cmp2, double %5, double 0.000000e+00
 ; CHECK-NEXT:   br i1 %cmp2, label %invertb1, label %invertb2
 ; CHECK-NEXT: }
 
